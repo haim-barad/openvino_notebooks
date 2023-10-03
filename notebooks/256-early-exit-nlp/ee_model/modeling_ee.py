@@ -1,8 +1,7 @@
 import torch
 from torch import nn
-from transformers import AutoConfig, AutoModel
+from transformers import PreTrainedModel, AutoModel
 from transformers.modeling_outputs import QuestionAnsweringModelOutput
-from transformers.modeling_utils import PreTrainedModel
 
 from .configuration_ee import EarlyExitConfig
 
@@ -61,6 +60,7 @@ class RampClassifier(nn.Module):
         logits = self.classifier(hidden_state)
         return logits
 
+from transformers import BertConfig
 
 # Trainable model wrapper
 class EarlyExitModelForQuestionAnswering(PreTrainedModel):
