@@ -2,8 +2,9 @@ import torch
 from datasets import load_dataset
 from torch.utils.data import DataLoader
 from torch.optim import Adam
-from transformers import get_linear_schedule_with_warmup
-
+from transformers import AutoTokenizer, get_linear_schedule_with_warmup
+from .ee_model.configuration_ee import EarlyExitConfig
+from .ee_model.modeling_ee import EarlyExitModelForQuestionAnswering
 
 
 def preprocess_squad2_dataset(tokenizer=None, num_samples=-1):
@@ -67,13 +68,15 @@ def preprocess_squad2_dataset(tokenizer=None, num_samples=-1):
 
 
 class EarlyExitModelTrainer:
-    def __init__(self, model=None, save_dir="./ee_model_ckpt"):
+    """Class for training an early exit model in phases"""
+    def __init__(self, model=None, save_dir=None):
         self.model = model
         self.save_dir = save_dir
         self.training_phase = 1
         self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
     def set_training_phase(self, phase=1):
+        """Setter for training phase (1 or 2)"""
         if phase == self.training_phase:
             return
         
@@ -93,17 +96,20 @@ class EarlyExitModelTrainer:
             raise ValueError('Training phase can be 1 or 2 only.')
 
     def get_training_phase(self):
+        """Getter for training phasse"""
         return self.training_phase
 
     def save_model_checkpoint(self):
+        """Function for saving model checkpoints during training"""
         self.model.save_pretrained(self.save_dir)
 
     def train(self, dataset=None, **kwargs):
+        """Function to train model"""
         # Set up training configuration
         batch_size = kwargs.get("batch_size", 32)
         lr = kwargs.get("lr", 3e-5)
         weight_decay = kwargs.get("weight_decay", 0.01)
-        num_epochs = kwargs.get("num_epochs", 3)
+        num_epochs = kwargs.get("num_epochs", 4)
         warmup_proportion = kwargs.get("warmup_proportion", 0.2)
 
         # Define dataloader
@@ -116,6 +122,7 @@ class EarlyExitModelTrainer:
         num_training_steps = len(train_loader)*num_epochs
         num_warmup_steps = int(warmup_proportion*training_steps)  
         scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=num_training_steps)
+        self.model.train()
 
         # Training loop
         for epoch in range(num_epochs):
@@ -145,3 +152,71 @@ class EarlyExitModelTrainer:
             # Save model checkpoint locally after each epoch
             self.save_model_checkpoint()
             print(f"Saved model checkpoint after epoch {epoch+1} in")
+
+        self.model.eval()
+
+
+def load_model_checkpoint(save_dir=None):
+    """Function to load model checkpoints if required"""
+    return EarlyExitModelForQuestionAnswering.from_pretrained(save_dir)
+
+
+def parse_parameters():
+    parser = argparse.ArgumentParser(description="""Train Early Exit Model""")
+    parser.add_argument("--base_model", action="store", dest="base_model", required=False, default="bert-base-uncased", help="""--- Base HuggingFace Model for building Early Exit model. This model should have embeddings and encoder attributes ---""")
+    parser.add_argument("--dataset_size", action="store", dest="dataset_size", required=False, default=-1, help="""--- Number of samples from the SQUAD v2 dataset to train the model. Defaults to -1 which uses the entire SQUAD v2 training dataset ---""")
+    parser.add_argument("--batch_size", action="store", dest="batch_size", required=False, default=32, help="""--- Batch Size for finetuning model. Defaults to 32 ---""")
+    parser.add_argument("--save_dir", action="store", dest="save_dir", required=False, default="./ee_model_ckpt", help="""--- Directory to save trained model ---""")
+    parser.add_argument("--num_epochs", action="store", dest="num_epochs", required=False, default=4, help="""--- Number of epochs for each phase. Defaults to 4 ---""")
+    parser.add_argument("--lr", action="store", dest="lr", required=False, default=3e-5, help="""--- learning rate. Defaults to 3e-5 ---""")
+    return parser.parse_args()
+
+
+def main()
+    # Parse arguments
+    args = parse_parameters()
+
+    # Initialize an Early Exit model object and tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(args.base_model)
+    model = EarlyExitModelForQuestionAnswering(EarlyExitConfig(base_model=args.base_model))
+
+    # Prepare dataset for training
+    tokenized_squad2 = preprocess_squad_dataset(tokenizer=tokenizer, num_samples=int(args.dataset_size))
+
+    # Initialize model trainer
+    trainer = EarlyExitModelTrainer(model=model, save_dir=args.save_dir)
+    
+    # Finetuning Phase 1
+    print("Finetuning Phase 1")
+    trainer.train(dataset=tokenized_sqaud2, batch_size=args.batch_size, lr=args.lr, num_epochs=args.num_epochs)
+
+    # Finetuning Phase 2
+    print("Finetuning Phase 2")
+    trainer.set_training_phase(phase=2)
+    trainer.train(dataset=tokenized_sqaud2, batch_size=args.batch_size, lr=args.lr, num_epochs=args.num_epochs)
+
+    # Testing
+    print("Finetuning Complete!")
+    ## Load the most recent checkpoint
+    model = load_model_checkpoint(save_dir=args.save_dir)
+
+    ## Test the trained model on some question-context pairs from the squad dataset
+    model.eval()
+
+    questions = ["Which name is also used to describe the Amazon rainforest in English?", "Where do I live?"]
+    contexts =  ["The Amazon rainforest (Portuguese: Floresta Amazônica or Amazônia; Spanish: Selva Amazónica, Amazonía or usually Amazonia; French: Forêt amazonienne; Dutch: Amazoneregenwoud), also known in English as Amazonia or the Amazon Jungle, is a moist broadleaf forest that covers most of the Amazon basin of South America. This basin encompasses 7,000,000 square kilometres (2,700,000 sq mi), of which 5,500,000 square kilometres (2,100,000 sq mi) are covered by the rainforest. This region includes territory belonging to nine nations. The majority of the forest is contained within Brazil, with 60% of the rainforest, followed by Peru with 13%, Colombia with 10%, and with minor amounts in Venezuela, Ecuador, Bolivia, Guyana, Suriname and French Guiana. States or departments in four nations contain \"Amazonas\" in their names. The Amazon represents over half of the planet's remaining rainforests, and comprises the largest and most biodiverse tract of tropical rainforest in the world, with an estimated 390 billion individual trees divided into 16,000 species.", "My name is Clara and I live in Berkeley."]
+
+    # Inference using pipeline class from transformers
+    qa_pipe = pipeline("question-answering", model=model, tokenizer=tokenizer, device=0 if torch.cuda.is_available() else -1) # id 0 for 1 gpu, -1 for cpu
+    print(qa_pipe(question=questions[0], context=contexts[0]))
+    print(qa_pipe(question=questions[1], context=contexts[1]))
+
+    # Inference using pipeline class and non-zero entropy threshold
+    model.set_entropy_threshold(2.0)
+    answerer = pipeline("question-answering", model=model, tokenizer=tokenizer, device=0 if torch.cuda.is_available() else -1)
+    print(qa_pipe(question=questions[0], context=contexts[0]))
+    print(qa_pipe(question=questions[1], context=contexts[1]))
+
+
+if __name__ == "__main__":
+    main()
