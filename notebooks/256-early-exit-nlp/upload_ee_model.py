@@ -8,7 +8,7 @@ from ee_model.modeling_ee import EarlyExitModelForQuestionAnswering
 def parse_parameters():
     parser = argparse.ArgumentParser(description="""Upload Early Exit Model to HuggingFace Hub""")
     parser.add_argument("--save_dir", action="store", dest="save_dir", required=False, default="./ee_model_ckpt", help="""--- Directory where finetuned model is stored ---""")
-    parser.add_argument("--model_repo", action="store", dest="model_repo", required=False, default="ee-qa-model", help="""--- Model repo to ---""")
+    parser.add_argument("--model_repo", action="store", dest="model_repo", required=False, default="ee-qa-model", help="""--- Model repo to push finetuned model to ---""")
     return parser.parse_args()
 
 def main():

@@ -109,10 +109,7 @@ class EarlyExitModelTrainer:
         """Getter for training phasse"""
         return self.training_phase
 
-    def save_model_checkpoint(self):
-        """Function for saving model checkpoints during training"""
-        self.model.save_pretrained(self.save_dir)
-
+    
     def train(self, dataset=None, **kwargs):
         """Function to train model"""
         # Set up training configuration
@@ -157,7 +154,7 @@ class EarlyExitModelTrainer:
 
                 # Display training loss and save model checkpoint after every 500 steps
                 if num_steps % 500 == 0:
-                    print(f"Loss at step {num_steps}: {loss}")
+                    print(f"Step {num_steps} Loss: {loss}")
                     self.save_model_checkpoint()
   
             avg_step_loss /= num_steps
@@ -167,7 +164,17 @@ class EarlyExitModelTrainer:
             self.save_model_checkpoint()
             print(f"Saved model checkpoint after epoch {epoch+1} in")
 
+        self.reset_model_param_grads()
         self.model.eval()
+
+    def save_model_checkpoint(self):
+        """Function for saving model checkpoints during training"""
+        self.model.save_pretrained(self.save_dir)
+
+    def reset_model_param_grads(self):
+        """Function to set requires_grad to true for all model parameters after training phase."""
+        for params in self.model.parameters():
+                params.requires_grad = True
 
 
 def load_model_checkpoint(save_dir=None):
