@@ -82,21 +82,24 @@ class EarlyExitModelTrainer:
     def __init__(self, model=None, save_dir=None):
         self.model = model
         self.save_dir = save_dir
-        self.training_phase = -1 # -1 represents phase hasn't been set
+        self.training_phase = None # phase hasn't been set
         self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
     def set_training_phase(self, phase=1):
         """Setter for training phase (1 or 2)"""
-        if phase == self.training_phase:
+        if self.training_phase is not None and phase == self.training_phase:
             return
+
+        # Set requires_grad to true for all model parameters before changing training phase
+        self.reset_model_param_grads()
         
         if phase == 1:
-            ## Freeze n-1 ramp classifiers
+            # Freeze n-1 ramp classifiers
             for params in self.model.ramp_classifiers[:-1].parameters():
                 params.requires_grad = False
             self.training_phase = 1
         elif phase == 2:
-            ## Freeze all parameters execept n-1 ramp classifiers
+            # Freeze all parameters execept n-1 ramp classifiers
             for params in self.model.parameters():
                 params.requires_grad = False    
             for params in self.model.ramp_classifiers[:-1].parameters():
@@ -106,10 +109,9 @@ class EarlyExitModelTrainer:
             raise ValueError('Training phase can be 1 or 2 only.')
 
     def get_training_phase(self):
-        """Getter for training phasse"""
+        """Getter for training phase"""
         return self.training_phase
 
-    
     def train(self, dataset=None, **kwargs):
         """Function to train model"""
         # Set up training configuration
@@ -128,12 +130,13 @@ class EarlyExitModelTrainer:
         num_training_steps = len(train_loader)*num_epochs
         num_warmup_steps = int(warmup_proportion*num_training_steps)  
         scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=num_training_steps)
-        self.model.train()
 
+        total_steps = 0
         # Training loop
         for epoch in range(num_epochs):
             avg_step_loss = 0
-            num_steps = 0
+            epoch_steps = 0
+            self.model.train()
 
             for qa_pair in train_loader:
                 optimizer.zero_grad()
@@ -150,22 +153,26 @@ class EarlyExitModelTrainer:
                 loss.backward()
                 optimizer.step()
                 scheduler.step()
-                num_steps += 1
+                epoch_steps += 1
+                total_steps += 1
 
                 # Display training loss and save model checkpoint after every 500 steps
-                if num_steps % 500 == 0:
-                    print(f"Step {num_steps} Loss: {loss}")
+                if total_steps % 500 == 0:
+                    print(f"Step {total_steps} Loss: {loss}")
                     self.save_model_checkpoint()
+
+                del input_ids, attention_mask, start_positions, end_positions, output
   
-            avg_step_loss /= num_steps
+            avg_step_loss /= epoch_steps
             print(f"Epoch {epoch+1} Complete, Average Loss: {avg_step_loss}")
 
             # Save model checkpoint after each epoch
             self.save_model_checkpoint()
-            print(f"Saved model checkpoint after epoch {epoch+1} in")
+            print(f"Saved model checkpoint after epoch {epoch+1} in {self.save_dir}.")
 
+        # Save final finetuned model by resetting model params
         self.reset_model_param_grads()
-        self.model.eval()
+        self.save_model_checkpoint()
 
     def save_model_checkpoint(self):
         """Function for saving model checkpoints during training"""
@@ -221,9 +228,6 @@ def main():
 
     # Load the most recent checkpoint
     model = load_model_checkpoint(save_dir=args.save_dir)
-
-    ## Test the trained model on some question-context pairs from the squad dataset
-    model.eval()
 
     print("Testing finetuned model on some question-context pairs..")
     questions = ["Which name is also used to describe the Amazon rainforest in English?", "Where do I live?"]
